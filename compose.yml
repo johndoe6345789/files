@@ -1,0 +1,52 @@
+# Run the whole thing locally:  docker compose up --build   ->  http://localhost:8080
+# No login by design: anyone who can reach the port can list, upload and download files.
+name: files
+
+services:
+  backend:
+    build:
+      context: ./backend
+    environment:
+      FILES_MAX_TOTAL_BYTES: ${FILES_MAX_TOTAL_BYTES:-21474836480}   # 20 GiB
+    volumes:
+      - data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      retries: 6
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    restart: unless-stopped
+
+  portal:
+    build:
+      context: ./frontend
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      retries: 5
+      start_period: 5s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    restart: unless-stopped
+
+volumes:
+  data:

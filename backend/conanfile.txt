@@ -1,0 +1,11 @@
+[requires]
+drogon/1.9.7
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[options]
+drogon/*:with_orm=True
+drogon/*:with_sqlite=True
+drogon/*:with_boost=False
