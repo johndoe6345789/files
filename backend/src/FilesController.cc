@@ -75,7 +75,15 @@ void FilesController::upload(const HttpRequestPtr& req, Callback&& cb) {
     const std::string name = sanitizeName(rawName);
 
     const std::string_view body = req->body();
-    if (body.empty()) return cb(error(k400BadRequest, "the file is empty"));
+    if (body.empty()) {
+        // A body that was announced but is not there means Drogon could not keep it (its temp file): not the client's fault.
+        unsigned long long announced = 0;
+        if (parseU64(req->getHeader("content-length"), announced) && announced > 0) {
+            LOG_ERROR << "request body of " << announced << " bytes was lost (is <upload_path>/tmp writable?)";
+            return cb(error(k500InternalServerError, "could not receive the file"));
+        }
+        return cb(error(k400BadRequest, "the file is empty"));
+    }
     if (body.size() > kMaxFileBytes) return cb(error(k413RequestEntityTooLarge, "the file is too large"));
     if (totalBytes() + body.size() > config().maxTotalBytes)
         return cb(error(k507InsufficientStorage, "the storage is full"));

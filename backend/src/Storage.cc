@@ -38,9 +38,12 @@ void prepareStorage() {
     // Interrupted uploads: half-written files and the temporary bodies Drogon spools big requests into.
     for (const auto& e : fs::directory_iterator(filesDir(), ec))
         if (e.path().extension() == ".part") fs::remove(e.path(), ec);
+    // Drogon keeps big request bodies in <upload_path>/tmp/<xx>/ and creates those folders itself at startup, before
+    // this runs: delete only the leftover files, never the folders (without them every big upload arrives empty).
     const auto tmp = fs::path(config().dataDir) / "tmp";
-    fs::remove_all(tmp, ec);
     fs::create_directories(tmp, ec);
+    for (const auto& e : fs::recursive_directory_iterator(tmp, ec))
+        if (e.is_regular_file(ec)) fs::remove(e.path(), ec);
 
     auto db = drogon::app().getDbClient();
     db->execSqlSync("PRAGMA journal_mode=WAL;");
