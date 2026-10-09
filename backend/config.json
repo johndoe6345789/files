@@ -13,7 +13,7 @@
     "threads_num": 4,
     "enable_session": false,
     "upload_path": "/data/tmp",
-    "client_max_body_size": "200M",
+    "client_max_body_size": "10G",
     "client_max_memory_body_size": "1M",
     "idle_connection_timeout": 120,
     "log": { "log_path": "", "log_level": "INFO" }

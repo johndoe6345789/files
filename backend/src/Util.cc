@@ -101,4 +101,33 @@ bool parseU64(std::string_view s, unsigned long long& out) {
     out = v;
     return true;
 }
+
+ByteRange parseRange(std::string_view h, unsigned long long size) {
+    ByteRange none;
+    while (!h.empty() && h.front() == ' ') h.remove_prefix(1);
+    if (h.substr(0, 6) != "bytes=") return none;
+    h.remove_prefix(6);
+    while (!h.empty() && h.back() == ' ') h.remove_suffix(1);
+    if (h.empty() || h.find(',') != std::string_view::npos) return none;
+    const auto dash = h.find('-');
+    if (dash == std::string_view::npos) return none;
+    const std::string_view a = h.substr(0, dash), b = h.substr(dash + 1);
+    unsigned long long first = 0, last = 0;
+    ByteRange r;
+    if (a.empty()) {  // "-n": the last n bytes
+        if (!parseU64(b, last)) return none;
+        if (last == 0 || size == 0) { r.kind = ByteRange::Kind::Unsatisfiable; return r; }
+        if (last > size) last = size;
+        r.kind = ByteRange::Kind::Satisfiable; r.start = size - last; r.length = last;
+        return r;
+    }
+    if (!parseU64(a, first)) return none;
+    if (b.empty()) last = size ? size - 1 : 0;
+    else if (!parseU64(b, last)) return none;
+    else if (last < first) return none;  // not a valid range: ignore it
+    if (first >= size) { r.kind = ByteRange::Kind::Unsatisfiable; return r; }
+    if (last >= size) last = size - 1;
+    r.kind = ByteRange::Kind::Satisfiable; r.start = first; r.length = last - first + 1;
+    return r;
+}
 }  // namespace files

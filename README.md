@@ -6,7 +6,8 @@ pick them with a file dialog. **There is no login.** Anyone who can reach it can
 - **Frontend:** React + TypeScript (Vite). Infinite scroll, drag and drop anywhere on the page, a file picker,
   per-file upload progress, two uploads at a time, retry on failure.
 - **Backend:** [Drogon](https://github.com/drogonframework/drogon) (C++17) with SQLite for the file list and the
-  files themselves on disk.
+  files themselves on disk. Uploads are streamed straight into the file's final place (no temporary copy, memory use
+  independent of the size) and downloads support `Range`, so a 10 GB file can be resumed.
 - **Front door:** nginx serves the built page and proxies `/api`.
 
 ```sh
@@ -20,12 +21,22 @@ until `backend/conanfile.txt` changes.
 
 | | |
 | --- | --- |
-| One file | 200 MB (`kMaxFileBytes` in `backend/src/Config.h`, `client_max_body_size` in `backend/config.json` and `frontend/nginx.conf`: keep the three equal) |
-| All files together | 20 GiB, `FILES_MAX_TOTAL_BYTES` (bytes) |
+| One file | 10 GB (`kMaxFileBytes` in `backend/src/Config.h`, `client_max_body_size` in `backend/config.json` and `frontend/nginx.conf`: keep the three equal). Anything in front of the portal (another proxy) needs the same limit and must not buffer request bodies |
+| All files together | 100 GiB, `FILES_MAX_TOTAL_BYTES` (bytes) |
 | Uploads per visitor | 20 per minute, burst 10 (`frontend/nginx.conf`), answered with 429 |
 | Names | cleaned on upload: no directory part, no control or bidi-override characters, valid UTF-8, 200 bytes |
 
 There is no delete in the public API, so nobody can remove other people's files.
+
+## Big uploads
+
+- The upload handler is a Drogon *streaming* handler (`backend/src/Upload.cc`): the body arrives in pieces and each piece is
+  written to `<id>.part`, which is renamed when the body is complete. A failed or interrupted upload leaves nothing behind.
+- It flushes to disk and drops the kernel's cached pages every 16 MiB. Without that, the page cache of a big write is charged
+  to the container's memory limit and, when the disk is slower than the network, the kernel kills the backend (found the hard
+  way: `Memory cgroup out of memory`, exit 137). With it, a 4 GiB upload ran under a 96 MB limit and a busy disk without a hitch.
+- Every proxy in front must allow 10 GB and stream instead of buffering, or a big upload is first copied to the proxy's disk
+  (and, with default settings, refused above its own limit). The bundled nginx does (`proxy_request_buffering off`).
 
 ## Keeping a public upload page safe
 
@@ -46,7 +57,7 @@ docker compose exec backend curl -X DELETE http://127.0.0.1:8080/api/files/<id>
 | --- | --- |
 | `GET /api/files?limit=50&before=<id>` | `{ "items": [{ "id", "name", "size", "createdAt" }], "next": <id or null> }`, newest first. `limit` 1..100. Pass `next` as `before` for the following page. |
 | `POST /api/files?name=<file name>` | The request body **is** the file. `201` with the new item; `400` empty or no name; `413` too big; `507` storage full. `curl --data-binary @photo.jpg -H 'Content-Type: application/octet-stream' "http://localhost:8080/api/files?name=photo.jpg"` |
-| `GET /api/files/<id>/download` | The file as an attachment. |
+| `GET /api/files/<id>/download` | The file as an attachment. Supports a single `Range: bytes=…` (206/416). |
 | `GET /api/info` | `{ maxFileBytes, maxTotalBytes, files, bytes }` |
 | `GET /api/health` | `{ "status": "ok" }` |
 | `DELETE /api/files/<id>` | Backend only (see above). |
@@ -67,7 +78,8 @@ docker run --rm --network files_default -v "$PWD/test:/t:ro" python:3.12-slim \
   python /t/api_test.py http://backend:8080 http://portal:8080
 ```
 
-It needs an empty `data` volume (it checks the starting state), uploads a 150 MB file, and finishes by tripping the
+It needs an empty `data` volume (it checks the starting state), uploads a 150 MB file (the 10 GB limit itself is checked with a
+header-only request; a real 10 GiB upload is a manual test), and finishes by tripping the
 rate limit, so run it against a throwaway stack, not one that matters.
 
 ## Layout

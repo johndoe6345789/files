@@ -36,7 +36,7 @@ if QUOTA:
 # ---- basics
 s, j, h = jcall(BACK, "GET", "/api/health"); check("health", s == 200 and j == {"status": "ok"}, (s, j))
 s, info, _ = jcall(BACK, "GET", "/api/info")
-check("info", s == 200 and info["maxFileBytes"] == 200 * 1024 * 1024 and info["files"] == 0 and info["bytes"] == 0, info)
+check("info", s == 200 and info["maxFileBytes"] == 10 * 1024**3 and info["files"] == 0 and info["bytes"] == 0, info)
 s, j, _ = jcall(BACK, "GET", "/api/files"); check("empty list", s == 200 and j == {"items": [], "next": None}, j)
 
 # ---- upload + download round trip, byte for byte
@@ -101,11 +101,28 @@ s, it, _ = up(PORTAL, "big.bin", big); check("a 150 MB upload through the portal
 s, h, d = call(PORTAL, "GET", f"/api/files/{it['id']}/download")
 check("and downloads back identical", s == 200 and hashlib.sha256(d).digest() == hashlib.sha256(big).digest(), (s, len(d)))
 del d
-over = os.urandom(200 * 1024 * 1024 + 1)
-s, j, _ = up(PORTAL, "over.bin", over); check("201 MB is refused by the portal with 413", s == 413, s)
-s, j, _ = up(BACK, "over.bin", over); check("201 MB is refused by the backend with 413", s == 413, s)
-del over, big
-s, info, _ = jcall(BACK, "GET", "/api/info"); check("a refused file is not counted", info["bytes"] < 200 * 1024 * 1024 * 2, info)
+# Over the 10 GiB limit: announced by Content-Length, so the answer comes without sending a single byte of body.
+def announce(base, length):
+    c = http.client.HTTPConnection(base.hostname, base.port, timeout=30)
+    c.putrequest("POST", "/api/files?name=over.bin"); c.putheader("Content-Length", str(length)); c.endheaders()
+    r = c.getresponse(); r.read(); c.close(); return r.status
+check("10 GiB + 1 byte is refused by the portal with 413", announce(PORTAL, 10 * 1024**3 + 1) == 413)
+check("10 GiB + 1 byte is refused by the backend with 413", announce(BACK, 10 * 1024**3 + 1) == 413)
+del big
+
+# ---- resumable downloads (Range)
+data = bytes(range(256)) * 1000
+s, it, _ = up(BACK, "ranged.bin", data)
+def rng(base, header):
+    return call(base, "GET", f"/api/files/{it['id']}/download", None, {"Range": header} if header else None)
+s, h, d = rng(BACK, None); check("downloads advertise Accept-Ranges", s == 200 and h.get("accept-ranges") == "bytes" and d == data, h)
+for base, label in ((BACK, "backend"), (PORTAL, "portal")):
+    s, h, d = rng(base, "bytes=0-9"); check(f"{label}: first 10 bytes -> 206", s == 206 and d == data[:10] and h["content-range"] == f"bytes 0-9/{len(data)}", (s, h.get("content-range"), d[:12]))
+    s, h, d = rng(base, "bytes=250000-"); check(f"{label}: open-ended range resumes at an offset", s == 206 and d == data[250000:] and h["content-range"] == f"bytes 250000-{len(data)-1}/{len(data)}", (s, h.get("content-range"), len(d)))
+    s, h, d = rng(base, "bytes=-5"); check(f"{label}: last 5 bytes", s == 206 and d == data[-5:], (s, d))
+s, h, d = rng(BACK, f"bytes={len(data)}-"); check("a range past the end is 416 with the size", s == 416 and h["content-range"] == f"bytes */{len(data)}", (s, h))
+s, h, d = rng(BACK, "bytes=0-1,5-6"); check("several ranges are ignored (whole file)", s == 200 and d == data, s)
+s, h, d = rng(BACK, "bytes=garbage"); check("a junk Range is ignored (whole file)", s == 200 and d == data, s)
 
 # ---- operator delete, straight to the backend
 s, j, _ = jcall(BACK, "DELETE", f"/api/files/{it['id']}"); check("operator DELETE works", s == 200 and j["deleted"] == it["id"], (s, j))

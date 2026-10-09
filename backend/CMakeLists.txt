@@ -8,7 +8,7 @@ find_package(Drogon CONFIG REQUIRED)
 
 # Everything except main.cc, so the test binary links the same code the server runs. OBJECT (not STATIC) so the
 # controller's static registration is never dropped by the linker.
-add_library(files_lib OBJECT src/Util.cc src/Storage.cc src/FilesController.cc)
+add_library(files_lib OBJECT src/Util.cc src/Storage.cc src/Upload.cc src/FilesController.cc)
 target_include_directories(files_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(files_lib PUBLIC Drogon::Drogon)
 

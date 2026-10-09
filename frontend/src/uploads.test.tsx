@@ -31,6 +31,16 @@ describe("useUploads", () => {
     expect(pending.map((p) => p.name)).toEqual(["ok"]);
   });
 
+  it("refuses a file the storage has no room for, without sending it", () => {
+    const { pending, uploader } = controllable();
+    const { result } = renderHook(() => useUploads(1000, () => {}, uploader, 500));
+    act(() => result.current.add([fileOf("fits", 500), fileOf("too-much", 501)]));
+    const by = Object.fromEntries(result.current.uploads.map((u) => [u.file.name, u]));
+    expect(by["too-much"].status).toBe("error");
+    expect(by["too-much"].error).toMatch(/Not enough storage left: 500 B free/);
+    expect(pending.map((p) => p.name)).toEqual(["fits"]);
+  });
+
   it("sends two at a time and starts the next as one finishes", async () => {
     const { pending, uploader } = controllable();
     const { result } = renderHook(() => useUploads(undefined, () => {}, uploader));

@@ -68,67 +68,34 @@ void FilesController::list(const HttpRequestPtr& req, Callback&& cb) {
     cb(json(out));
 }
 
-// POST /api/files?name=<file name>, the request body is the file itself.
-void FilesController::upload(const HttpRequestPtr& req, Callback&& cb) {
-    const auto& rawName = req->getParameter("name");
-    if (rawName.empty()) return cb(error(k400BadRequest, "missing ?name="));
-    const std::string name = sanitizeName(rawName);
-
-    const std::string_view body = req->body();
-    if (body.empty()) {
-        // A body that was announced but is not there means Drogon could not keep it (its temp file): not the client's fault.
-        unsigned long long announced = 0;
-        if (parseU64(req->getHeader("content-length"), announced) && announced > 0) {
-            LOG_ERROR << "request body of " << announced << " bytes was lost (is <upload_path>/tmp writable?)";
-            return cb(error(k500InternalServerError, "could not receive the file"));
-        }
-        return cb(error(k400BadRequest, "the file is empty"));
-    }
-    if (body.size() > kMaxFileBytes) return cb(error(k413RequestEntityTooLarge, "the file is too large"));
-    if (totalBytes() + body.size() > config().maxTotalBytes)
-        return cb(error(k507InsufficientStorage, "the storage is full"));
-
-    const std::string key = newKey();
-    const std::string path = pathFor(key), part = path + ".part";
-    {
-        std::ofstream out(part, std::ios::binary | std::ios::trunc);
-        constexpr std::size_t kSlice = 1 << 20;
-        for (std::size_t off = 0; out && off < body.size(); off += kSlice)
-            out.write(body.data() + off, static_cast<std::streamsize>(std::min(kSlice, body.size() - off)));
-        out.flush();
-        if (!out) {
-            std::error_code ec;
-            fs::remove(part, ec);
-            LOG_ERROR << "writing " << part << " failed";
-            return cb(error(k500InternalServerError, "could not store the file"));
-        }
-    }
-    std::error_code ec;
-    fs::rename(part, path, ec);
-    if (ec) {
-        fs::remove(part, ec);
-        return cb(error(k500InternalServerError, "could not store the file"));
-    }
-    try {
-        const long long id = insertFile(key, name, body.size());
-        auto row = findFile(id);
-        LOG_INFO << "stored file " << id << " (" << body.size() << " bytes)";
-        return cb(json(toJson(*row), k201Created));
-    } catch (const std::exception& e) {
-        fs::remove(path, ec);
-        LOG_ERROR << "database insert failed: " << e.what();
-        return cb(error(k500InternalServerError, "could not store the file"));
-    }
-}
-
 // GET /api/files/<id>/download: always an attachment of opaque bytes, so a file can never run as a page on this origin.
 void FilesController::download(const HttpRequestPtr& req, Callback&& cb, std::string&& id) {
     long long n;
     if (!parseId(id, n)) return cb(error(k404NotFound, "no such file"));
     auto row = findFile(n);
     std::error_code ec;
-    if (!row || !fs::exists(pathFor(row->key), ec)) return cb(error(k404NotFound, "no such file"));
-    auto resp = HttpResponse::newFileResponse(pathFor(row->key), "", CT_APPLICATION_OCTET_STREAM, "", req);
+    if (!row) return cb(error(k404NotFound, "no such file"));
+    const std::string path = pathFor(row->key);
+    const auto size = static_cast<unsigned long long>(fs::file_size(path, ec));
+    if (ec) return cb(error(k404NotFound, "no such file"));
+
+    // Resumable downloads: a 10 GB file that stops at 9 GB must not start over. The file never changes once stored.
+    const auto range = parseRange(req->getHeader("range"), size);
+    if (range.kind == ByteRange::Kind::Unsatisfiable) {
+        auto r = error(k416RequestedRangeNotSatisfiable, "that range is outside the file");
+        r->addHeader("Content-Range", "bytes */" + std::to_string(size));
+        return cb(r);
+    }
+    HttpResponsePtr resp;
+    if (range.kind == ByteRange::Kind::Satisfiable) {
+        resp = HttpResponse::newFileResponse(path, range.start, range.length, false, "", CT_APPLICATION_OCTET_STREAM, "", req);
+        resp->setStatusCode(k206PartialContent);
+        resp->addHeader("Content-Range", "bytes " + std::to_string(range.start) + "-" +
+                                             std::to_string(range.start + range.length - 1) + "/" + std::to_string(size));
+    } else {
+        resp = HttpResponse::newFileResponse(path, "", CT_APPLICATION_OCTET_STREAM, "", req);
+    }
+    resp->addHeader("Accept-Ranges", "bytes");
     resp->addHeader("Content-Disposition", contentDisposition(row->name));
     resp->addHeader("X-Content-Type-Options", "nosniff");
     resp->addHeader("Content-Security-Policy", "sandbox; default-src 'none'");

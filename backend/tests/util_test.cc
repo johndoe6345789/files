@@ -61,6 +61,37 @@ int main() {
     for (const char* bad : {"", "-1", "1x", " 1", "0x10", "1.5"})
         if (parseU64(bad, v)) { ++failures; std::cerr << "FAIL parse accepted [" << bad << "]\n"; }
 
+    // Range header
+    {
+        auto expect = [&](const char* hdr, unsigned long long size, ByteRange::Kind kind, unsigned long long start, unsigned long long len, int line) {
+            const auto r = parseRange(hdr, size);
+            if (r.kind != kind || (kind == ByteRange::Kind::Satisfiable && (r.start != start || r.length != len))) {
+                ++failures; std::cerr << "FAIL range line " << line << " [" << hdr << "] got kind " << int(r.kind) << " " << r.start << "+" << r.length << "\n";
+            }
+        };
+        using K = ByteRange::Kind;
+        expect("bytes=0-9", 100, K::Satisfiable, 0, 10, __LINE__);
+        expect("bytes=10-", 100, K::Satisfiable, 10, 90, __LINE__);
+        expect("bytes=-5", 100, K::Satisfiable, 95, 5, __LINE__);
+        expect("bytes=-500", 100, K::Satisfiable, 0, 100, __LINE__);       // longer than the file: all of it
+        expect("bytes=90-999", 100, K::Satisfiable, 90, 10, __LINE__);     // end clipped to the file
+        expect("bytes=0-0", 100, K::Satisfiable, 0, 1, __LINE__);
+        expect("bytes=99-99", 100, K::Satisfiable, 99, 1, __LINE__);
+        expect("bytes=10737418240-10737418250", 10737418300ull, K::Satisfiable, 10737418240ull, 11, __LINE__);  // beyond 4 GiB
+        expect("bytes=100-", 100, K::Unsatisfiable, 0, 0, __LINE__);
+        expect("bytes=100-200", 100, K::Unsatisfiable, 0, 0, __LINE__);
+        expect("bytes=-0", 100, K::Unsatisfiable, 0, 0, __LINE__);
+        expect("bytes=0-5", 0, K::Unsatisfiable, 0, 0, __LINE__);          // nothing to range over
+        expect("bytes=5-2", 100, K::None, 0, 0, __LINE__);                 // backwards: ignored
+        expect("bytes=0-1,5-6", 100, K::None, 0, 0, __LINE__);             // several ranges: ignored
+        expect("items=0-1", 100, K::None, 0, 0, __LINE__);
+        expect("bytes=abc", 100, K::None, 0, 0, __LINE__);
+        expect("bytes=-", 100, K::None, 0, 0, __LINE__);
+        expect("bytes=", 100, K::None, 0, 0, __LINE__);
+        expect("", 100, K::None, 0, 0, __LINE__);
+        expect("  bytes=1-2  ", 100, K::Satisfiable, 1, 2, __LINE__);
+    }
+
     if (failures) { std::cerr << failures << " check(s) failed\n"; return 1; }
     std::cout << "util_test: all checks passed\n";
     return 0;

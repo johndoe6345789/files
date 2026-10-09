@@ -21,6 +21,7 @@ export function useUploads(
   maxFileBytes: number | undefined,
   onUploaded: (item: FileItem) => void,
   uploader: Uploader = uploadFile,
+  freeBytes?: number,
 ) {
   const [uploads, setUploads] = useState<Upload[]>([]);
   const nextId = useRef(1);
@@ -39,11 +40,13 @@ export function useUploads(
         if (file.size === 0) error = "The file is empty.";
         else if (maxFileBytes !== undefined && file.size > maxFileBytes)
           error = `Too large: the limit is ${formatBytes(maxFileBytes)} per file.`;
+        else if (freeBytes !== undefined && file.size > freeBytes)
+          error = `Not enough storage left: ${formatBytes(freeBytes)} free.`;
         return { id: nextId.current++, file, progress: 0, status: error ? "error" : "queued", error };
       });
       setUploads((list) => [...list, ...entries]);
     },
-    [maxFileBytes],
+    [maxFileBytes, freeBytes],
   );
 
   const dismiss = useCallback((id: number) => setUploads((l) => l.filter((u) => u.id !== id)), []);

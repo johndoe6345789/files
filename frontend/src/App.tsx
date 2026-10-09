@@ -27,7 +27,12 @@ export function App() {
     },
     [prepend, refreshInfo],
   );
-  const { uploads, add, dismiss, retry } = useUploads(info?.maxFileBytes, onUploaded);
+  const { uploads, add, dismiss, retry } = useUploads(
+    info?.maxFileBytes,
+    onUploaded,
+    undefined,
+    info ? Math.max(0, info.maxTotalBytes - info.bytes) : undefined,
+  );
 
   // Dropping anywhere on the page works; a counter copes with dragenter/dragleave firing for child elements.
   useEffect(() => {

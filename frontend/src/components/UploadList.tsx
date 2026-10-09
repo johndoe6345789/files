@@ -24,7 +24,7 @@ export function UploadList({ uploads, onDismiss, onRetry }: Props) {
           {u.status === "error" && (
             <>
               <span className="meta error">{u.error}</span>
-              {u.file.size > 0 && !u.error?.startsWith("Too large") && (
+              {u.file.size > 0 && !u.error?.startsWith("Too large") && !u.error?.startsWith("Not enough") && (
                 <button type="button" className="link" onClick={() => onRetry(u.id)}>Retry</button>
               )}
               <button type="button" className="link" onClick={() => onDismiss(u.id)}>Dismiss</button>
