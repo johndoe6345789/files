@@ -117,5 +117,12 @@ codes = [up(PORTAL, f"rl-{i}.txt", b"r")[0] for i in range(45)]
 check("uploads through the portal are rate limited (429)", 429 in codes and codes.count(201) >= 10, {c: codes.count(c) for c in set(codes)})
 s, j, _ = jcall(PORTAL, "GET", "/api/files"); check("reading is not rate limited", s == 200, s)
 
+# Behind CapRover the visitor is the second-to-last X-Forwarded-For entry; a visitor-supplied prefix must not help.
+def post_as(chain, name="x.txt"):
+    return call(PORTAL, "POST", "/api/files?name=" + name, b"r", {"X-Forwarded-For": chain})[0]
+codes = [post_as(f"10.9.{i}.1, 5.5.5.5, 6.6.6.6") for i in range(40)]   # a different fake prefix every time, same visitor
+check("faking the start of X-Forwarded-For does not escape the limit", 429 in codes and codes.count(201) <= 12, {c: codes.count(c) for c in set(codes)})
+check("another visitor is not held back by it", post_as("1.1.1.1, 7.7.7.7, 6.6.6.6") == 201)
+
 print("ALL PASSED" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)
